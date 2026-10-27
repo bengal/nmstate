@@ -944,6 +944,7 @@ impl MergedInterfaces {
         self.apply_copy_mac_from()?;
         self.validate_hsr_mac()?;
         self.copy_hsr_mac()?;
+        self.ensure_ovs_local_port()?;
         self.validate_controller_and_port_list_confliction()?;
         self.resolve_port_name_ref()?;
         self.resolve_parent_name_ref()?;
@@ -994,6 +995,64 @@ impl MergedInterfaces {
         {
             merged_iface.process_allow_extra_bridge_ports();
         }
+    }
+
+    fn ensure_ovs_local_port(&mut self) -> Result<(), NmstateError> {
+        let mut to_inject: Vec<String> = Vec::new();
+        for iface in self.user_ifaces.values().filter(|i| {
+            i.is_desired()
+                && i.merged.is_up()
+                && i.merged.iface_type() == InterfaceType::OvsBridge
+        }) {
+            let br_name = iface.merged.name();
+            // Whether the bridge already has a port with its own name.
+            let has_local_port = iface
+                .merged
+                .ports()
+                .unwrap_or_default()
+                .contains(&br_name);
+            // Whether the bridge name can be used by the local port: either
+            // no kernel interface is holding it, or it is held by a plain
+            // (non-patch, non-DPDK) OVS interface.
+            let name_usable = match self.kernel_ifaces.get(br_name) {
+                Some(i) => matches!(&i.merged, Interface::OvsInterface(o)
+                    if o.patch.is_none() && o.dpdk.is_none()),
+                None => true,
+            };
+            match (has_local_port, name_usable) {
+                // The local port is already a plain OVS internal interface.
+                (true, true) => {}
+                (true, false) => {
+                    log::warn!(
+                        "OVS bridge {br_name} has a port with the same name \
+                         that is not an internal interface. Not adding the \
+                         local port."
+                    );
+                }
+                (false, true) => to_inject.push(br_name.to_string()),
+                (false, false) => {
+                    log::warn!(
+                        "OVS bridge {br_name} name is already taken by an \
+                         interface that is not a plain OVS internal one. \
+                         Not adding the local port."
+                    );
+                }
+            }
+        }
+        for br_name in to_inject {
+            log::warn!(
+                "OVS bridge {br_name} is missing the local port. Adding it to \
+                 avoid connectivity problems."
+            );
+            if let Some(iface) = self
+                .user_ifaces
+                .get_mut(&(br_name.clone(), InterfaceType::OvsBridge))
+            {
+                iface.add_local_port();
+            }
+        }
+
+        Ok(())
     }
 
     fn apply_copy_mac_from(&mut self) -> Result<(), NmstateError> {

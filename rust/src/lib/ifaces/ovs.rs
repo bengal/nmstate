@@ -751,72 +751,41 @@ impl OvsDpdkConfig {
 }
 
 impl MergedInterface {
-    // Since OVS Bridge cannot live without port, when user desire empty
-    // OVS bridge, we add a OVS internal interface using the same name as the
-    // OVS bridge.
-    pub(crate) fn create_ovs_iface_for_empty_ports(&mut self) {
-        if self.is_desired()
-            && self.merged.iface_type() == InterfaceType::OvsBridge
-            && self.merged.ports().map(|p| p.is_empty()).unwrap_or(true)
-        {
-            log::warn!(
-                "OVS bridge {} cannot exist with empty port list, adding a \
-                 OVS internal interface with the same name",
-                self.merged.name()
-            );
-            let iface_name = self.merged.name().to_string();
 
-            if let (
-                Some(Interface::OvsBridge(verify_iface)),
-                Some(Interface::OvsBridge(apply_iface)),
-                Interface::OvsBridge(merged_iface),
-                Some(Interface::OvsBridge(des_iface)),
-            ) = (
-                self.for_verify.as_mut(),
-                self.for_apply.as_mut(),
-                &mut self.merged,
-                &mut self.desired,
-            ) {
-                let port_confs = vec![OvsBridgePortConfig {
-                    name: iface_name,
-                    ..Default::default()
-                }];
+    pub(crate) fn add_local_port(&mut self) {
+        let iface_name = self.merged.name().to_string();
 
-                if let Some(br_conf) = merged_iface.bridge.as_mut() {
-                    br_conf.ports = Some(port_confs.clone());
-                } else {
-                    merged_iface.bridge = Some(OvsBridgeConfig {
-                        ports: Some(port_confs.clone()),
-                        ..Default::default()
-                    })
-                }
+        if let (
+            Some(Interface::OvsBridge(verify_iface)),
+            Some(Interface::OvsBridge(apply_iface)),
+            Interface::OvsBridge(merged_iface),
+            Some(Interface::OvsBridge(des_iface)),
+        ) = (
+            self.for_verify.as_mut(),
+            self.for_apply.as_mut(),
+            &mut self.merged,
+            &mut self.desired,
+        ) {
+            let port_conf = OvsBridgePortConfig {
+                name: iface_name,
+                ..Default::default()
+            };
 
-                if let Some(br_conf) = apply_iface.bridge.as_mut() {
-                    br_conf.ports = Some(port_confs.clone());
-                } else {
-                    apply_iface.bridge = Some(OvsBridgeConfig {
-                        ports: Some(port_confs.clone()),
-                        ..Default::default()
-                    })
-                }
-
-                if let Some(br_conf) = des_iface.bridge.as_mut() {
-                    br_conf.ports = Some(port_confs.clone());
-                } else {
-                    des_iface.bridge = Some(OvsBridgeConfig {
-                        ports: Some(port_confs.clone()),
-                        ..Default::default()
-                    })
-                }
-
-                if let Some(br_conf) = verify_iface.bridge.as_mut()
-                    && br_conf.ports.is_some()
-                {
-                    br_conf.ports = Some(port_confs);
-                }
+            for br in [merged_iface, apply_iface, des_iface] {
+                br.bridge
+                    .get_or_insert_default()
+                    .ports
+                    .get_or_insert_default()
+                    .push(port_conf.clone());
             }
-        }
-    }
+
+            if let Some(br_conf) = verify_iface.bridge.as_mut()
+                && let Some(ports) = br_conf.ports.as_mut()
+            {
+                ports.push(port_conf);
+            }
+         }
+     }
 }
 
 impl MergedInterfaces {
